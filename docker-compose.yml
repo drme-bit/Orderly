@@ -1,0 +1,87 @@
+name: orderly
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:latest
+    container_name: orderly-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-orderly}
+      POSTGRES_USER: ${POSTGRES_USER:-orderly}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orderly}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+      TZ: ${TZ:-UTC}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # Since postgres:18 the cluster lives in /var/lib/postgresql/<major>/docker,
+      # so the whole data directory is mounted one level above PGDATA.
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging: *default-logging
+
+  redis:
+    image: redis:latest
+    container_name: orderly-redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --save
+      - "60 1"
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    logging: *default-logging
+
+  users:
+    build:
+      context: ./users
+      dockerfile: Dockerfile
+    image: orderly/users:latest
+    container_name: orderly-users
+    restart: unless-stopped
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-orderly}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-orderly}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-orderly}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      JAVA_TOOL_OPTIONS: "-XX:+ExitOnOutOfMemoryError"
+    ports:
+      - "${USERS_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080'"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    logging: *default-logging
+
+volumes:
+  postgres-data:
+  redis-data:
