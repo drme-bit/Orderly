@@ -5,6 +5,8 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
+import lombok.AllArgsConstructor;
+import lombok.Data;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -16,6 +18,9 @@ import java.util.UUID;
  * ({@code dev.drme.users.domain.UserEntity}) can evolve independently of the
  * database schema. Conversion is done by {@link UserJpaMapper}.
  */
+@Data
+@AllArgsConstructor
+
 @Entity
 @Table(name = "users")
 public class UserJpaEntity {

@@ -49,9 +49,13 @@ The first service is [`users`](users) — user profiles and their lifecycle.
 Requirements: Docker with the Compose plugin.
 
 ```bash
-cp .env.example .env        # optional: defaults are fine for local work
+cp .env.example .env        # required: set INTERNAL_SERVICE_TOKEN (see below)
 docker compose up -d --build
 ```
+
+`INTERNAL_SERVICE_TOKEN` is the shared secret for service-to-service calls. Generate it
+once with `openssl rand -hex 32` and keep it out of version control. Compose refuses to
+start without it.
 
 Then:
 
@@ -89,8 +93,11 @@ Base path: `/api/v1/users` — full reference in [docs/api/users.md](docs/api/us
 | PUT    | `/api/v1/users/{id}/suspend`    | ACTIVE → SUSPENDED               |
 | PUT    | `/api/v1/users/{id}/reactivate` | → ACTIVE                         |
 
-Authentication is **not** implemented in this service yet — every endpoint is open.
-It will be enforced by a dedicated auth service / gateway.
+User authentication is **not** implemented in this service yet — public endpoints are
+open until the dedicated auth service / gateway establishes the cookie session. Mutating
+requests are already CSRF-protected (see [the API reference](docs/api/users.md#csrf)).
+Internal service-to-service calls use a separate `/internal/**` prefix with a shared
+secret header; they are never part of the public ingress.
 
 ## Running the service without Docker
 
@@ -130,9 +137,11 @@ The service is configured through environment variables (Spring relaxed binding)
 | `SPRING_JPA_HIBERNATE_DDL_AUTO`  | `validate` (schema is owned by Flyway)         |
 | `SPRING_DATA_REDIS_HOST`         | `localhost`                                     |
 | `SPRING_DATA_REDIS_PORT`         | `6379`                                          |
+| `ORDERLY_INTERNAL_TOKEN`         | none — startup fails if missing                 |
 
-Compose additionally uses `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`,
-`POSTGRES_PORT`, `REDIS_PORT`, `USERS_PORT`, `TZ` (see `.env.example`).
+Compose additionally uses `INTERNAL_SERVICE_TOKEN` (mapped to `ORDERLY_INTERNAL_TOKEN`),
+`POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_PORT`, `REDIS_PORT`,
+`USERS_PORT`, `TZ` (see `.env.example`).
 
 ## Documentation
 
@@ -141,7 +150,9 @@ Compose additionally uses `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`,
 
 ## Known gaps
 
-- Authentication/authorization is deferred to the auth service.
+- User authentication/authorization is deferred to the auth service; public `permitAll()`
+  must become `authenticated()` when the cookie session lands.
+- Cross-origin frontend access needs a CORS configuration that allows credentials.
 - Redis is wired and configured but no code uses it yet.
 - No pagination on `GET /api/v1/users`.
 - `DELETE /users/{id}` is a hard delete; the `DELETED` status is not reachable via the API.

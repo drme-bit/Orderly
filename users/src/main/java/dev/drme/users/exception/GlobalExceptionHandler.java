@@ -1,6 +1,7 @@
 package dev.drme.users.exception;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,8 +12,13 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.web.AuthenticationEntryPoint;
+import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.validation.FieldError;
 import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
@@ -24,17 +30,51 @@ import org.springframework.web.method.annotation.HandlerMethodValidationExceptio
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
+import tools.jackson.databind.ObjectMapper;
 
+import java.io.IOException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+/**
+ * Single place for the API error contract: MVC exceptions, plus authentication and
+ * access-denied failures raised by the security filter chain before MVC is involved.
+ */
 @RestControllerAdvice
-public class GlobalExceptionHandler {
+public class GlobalExceptionHandler implements AuthenticationEntryPoint, AccessDeniedHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    private final ObjectMapper objectMapper;
+
+    GlobalExceptionHandler(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
+
+    // ---------------------------------------------------------------------
+    // Security filter chain
+    // ---------------------------------------------------------------------
+
+    @Override
+    public void commence(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            AuthenticationException ex
+    ) throws IOException {
+        writeSecurityError(request, response, HttpStatus.UNAUTHORIZED, "Authentication required");
+    }
+
+    @Override
+    public void handle(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            AccessDeniedException ex
+    ) throws IOException {
+        writeSecurityError(request, response, HttpStatus.FORBIDDEN, "Access denied");
+    }
 
     // ---------------------------------------------------------------------
     // 4xx
@@ -268,20 +308,44 @@ public class GlobalExceptionHandler {
             HttpServletRequest request,
             HttpHeaders headers
     ) {
-        ApiError body = new ApiError(
+        return ResponseEntity.status(status).headers(headers).body(error(status, message, request));
+    }
+
+    private static ApiError error(
+            HttpStatusCode status,
+            String message,
+            HttpServletRequest request
+    ) {
+        return new ApiError(
                 Instant.now(),
                 status.value(),
                 reasonOf(status),
                 message,
                 request.getRequestURI()
         );
-
-        return ResponseEntity.status(status).headers(headers).body(body);
     }
 
     private static String reasonOf(HttpStatusCode status) {
         return status instanceof HttpStatus httpStatus
                 ? httpStatus.getReasonPhrase()
                 : "Error";
+    }
+
+    /**
+     * Security failures bypass MVC exception handling, so there is no
+     * {@code ResponseEntity} to return — the same {@link ApiError} is serialized
+     * straight into the raw response.
+     */
+    private void writeSecurityError(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            HttpStatus status,
+            String message
+    ) throws IOException {
+        response.setStatus(status.value());
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.setCharacterEncoding("UTF-8");
+
+        objectMapper.writeValue(response.getWriter(), error(status, message, request));
     }
 }
